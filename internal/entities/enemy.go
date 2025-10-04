@@ -18,13 +18,13 @@ type Enemy struct {
 	Kind       string
 	FacesRight bool
 
-	// Стрельба
-	CanShoot   bool // <-- НОВОЕ: может ли стрелять
-	FireTimer  float32
-	FirePeriod float32
-	FireRange  float32
-	Shots      []*Projectile
-
+	// ---- боевые характеристики ----
+	HP            int // новое поле
+	CanShoot      bool
+	FireTimer     float32
+	FirePeriod    float32
+	FireRange     float32
+	Shots         []*Projectile
 	MeleeRange    float32
 	AttackCD      float32
 	AttackTimer   float32
@@ -46,6 +46,8 @@ func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, 
 		Alive: true,
 		Kind:  kind,
 
+		HP: 50,
+
 		FacesRight:    false,           // базовый кадр смотрит влево
 		CanShoot:      kind != "melee", // <-- только не-melee
 		FirePeriod:    1.5,
@@ -56,6 +58,7 @@ func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, 
 		ContactDamage: 10,
 	}
 	e.Anim.Play(e.Idle, true)
+
 	return e, nil
 }
 
@@ -131,5 +134,16 @@ func (e *Enemy) Draw() {
 		for _, p := range e.Shots {
 			p.Draw()
 		}
+	}
+}
+
+func (e *Enemy) TakeDamage(dmg int) {
+	if !e.Alive || dmg <= 0 {
+		return
+	}
+	e.HP -= dmg
+	if e.HP <= 0 {
+		e.HP = 0
+		e.Alive = false
 	}
 }

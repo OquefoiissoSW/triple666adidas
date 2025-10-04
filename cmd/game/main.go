@@ -1,15 +1,16 @@
 package main
 
 import (
-	"example.com/my2dgame/internal/entities"
-	"example.com/my2dgame/internal/ui"
-	"example.com/my2dgame/internal/world"
 	"fmt"
 	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"time"
+
+	"example.com/my2dgame/internal/entities"
+	"example.com/my2dgame/internal/ui"
+	"example.com/my2dgame/internal/world"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
@@ -300,6 +301,7 @@ func main() {
 	var (
 		player     *entities.Player
 		enemies    []*entities.Enemy
+		souls      []*entities.Soul
 		spawnT     float32
 		spawnEvery = float32(2.0)
 		cam        rl.Camera2D
@@ -440,7 +442,7 @@ func main() {
 			fitCameraToWorld(&cam, wpx, hpx)
 
 			// Update
-			player.Update(dt)
+			player.Update(dt, &cam)
 			player.X, player.Y = wrld.Clamp(player.X, player.Y)
 
 			for _, e := range enemies {
@@ -459,24 +461,77 @@ func main() {
 				}
 			}
 
+			// === ПОДБОР ДУШ ===
+			outSouls := souls[:0]
+			for _, s := range souls {
+				if !s.Alive {
+					continue
+				}
+
+				dx := s.X - player.X
+				dy := s.Y - player.Y
+				distSq := dx*dx + dy*dy
+				pickupRadius := float32(80 * player.Scale)
+
+				// Если игрок касается души
+				if !s.IsAbsorbing && distSq <= pickupRadius*pickupRadius {
+					s.IsAbsorbing = true
+					// увеличим счётчик только когда душа долетит до центра:
+					// player.Souls++ ← добавим при исчезновении ниже
+				}
+
+				// обновляем
+				s.Update(dt, player.X, player.Y)
+
+				// если душа исчезла и она притягивалась — засчитываем игроку
+				if !s.Alive && s.IsAbsorbing {
+					player.Souls++
+					continue
+				}
+
+				if s.Alive {
+					outSouls = append(outSouls, s)
+				}
+			}
+			souls = outSouls
+
 			// --- УРОН ---
 			// 1) Пули во врагах уже обновлены; проверим попадание по игроку
+			// --- Попадание пуль врагов по игроку ---
 			for _, e := range enemies {
-				if e.CanShoot {
-					for _, p := range e.Shots {
-						if !p.Alive {
-							continue
+				for _, shot := range e.Shots {
+					if !shot.Alive {
+						continue
+					}
+
+					// --- вычисляем визуальный центр игрока (аналогично тому, как ты делаешь у врага)
+					var px, py float32
+					var playerRadius float32
+
+					if player.A.Current != nil && player.A.FrameIndex < len(player.A.Current.Frames) {
+						f := player.A.Current.Frames[player.A.FrameIndex]
+						px = player.X - float32(f.OrigX)*player.Scale + float32(f.Src.Width)*player.Scale/2
+						py = player.Y - float32(f.OrigY)*player.Scale + float32(f.Src.Height)*player.Scale/2
+
+						// радиус — половина наибольшего измерения спрайта
+						w := float32(f.Src.Width) * player.Scale
+						h := float32(f.Src.Height) * player.Scale
+						if w > h {
+							playerRadius = w * 0.5
+						} else {
+							playerRadius = h * 0.5
 						}
-						// расстояние между отрезком траектории пули и отрезком траектории игрока за кадр
-						r := player.Radius + p.HitRadius
-						dist2 := segSegDistSq(
-							p.PrevX, p.PrevY, p.X, p.Y,
-							player.PrevX, player.PrevY, player.X, player.Y,
-						)
-						if dist2 <= r*r {
-							p.Alive = false
-							player.TakeDamage(10)
-						}
+						playerRadius *= 0.7 // немного уменьшим зону попадания
+					} else {
+						// запасной вариант
+						px, py = player.X, player.Y
+						playerRadius = 20 * player.Scale
+					}
+
+					// --- проверка пересечения сегмента пули и окружности игрока
+					if segmentCircleHit(shot.PrevX, shot.PrevY, shot.X, shot.Y, px, py, playerRadius+shot.HitRadius) {
+						player.TakeDamage(shot.Damage)
+						shot.Alive = false
 					}
 				}
 			}
@@ -512,6 +567,72 @@ func main() {
 				continue
 			}
 
+			// 4) Попадание пуль игрока во врагов
+			outShots := player.Shots[:0]
+			for _, shot := range player.Shots {
+				if !shot.Alive {
+					continue
+				}
+				hit := false
+
+				for _, e := range enemies {
+					if !e.Alive {
+						continue
+					}
+
+					// --- вычисляем визуальный центр врага (аналогично тому, как ты делаешь у игрока)
+					var cx, cy float32
+					var enemyRadius float32
+
+					if e.Anim.Current != nil && e.Anim.FrameIndex < len(e.Anim.Current.Frames) {
+						f := e.Anim.Current.Frames[e.Anim.FrameIndex]
+						cx = e.X - float32(f.OrigX)*e.Scale + float32(f.Src.Width)*e.Scale/2
+						cy = e.Y - float32(f.OrigY)*e.Scale + float32(f.Src.Height)*e.Scale/2
+
+						// радиус берём как половину наибольшего измерения кадра (можно немного уменьшить)
+						w := float32(f.Src.Width) * e.Scale
+						h := float32(f.Src.Height) * e.Scale
+						if w > h {
+							enemyRadius = w * 0.5
+						} else {
+							enemyRadius = h * 0.5
+						}
+						enemyRadius *= 0.7 // подгон: чуть меньше полного bounding-box
+					} else {
+						// запасной вариант
+						cx, cy = e.X, e.Y
+						enemyRadius = 20 * e.Scale
+					}
+
+					// --- проверка пересечения сегмента пули с окружностью врага
+					if segmentCircleHit(shot.PrevX, shot.PrevY, shot.X, shot.Y, cx, cy, enemyRadius+shot.HitRadius) {
+						// попадание
+						shot.Alive = false
+
+						wasAlive := e.Alive
+						e.TakeDamage(20) // <- подбери урон по вкусу / по типу оружия
+
+						// если ты НЕ делал вызов NewSoul внутри TakeDamage, создаём душу здесь
+						if wasAlive && !e.Alive {
+							if s, err := entities.NewSoul(assetsRoot, cx, cy); err == nil {
+								souls = append(souls, s)
+							} else {
+								// лог в консоль, но не фэйлим игру
+								fmt.Println("soul spawn:", err)
+							}
+						}
+
+						hit = true
+						break
+					}
+				}
+
+				if !hit && shot.Alive {
+					outShots = append(outShots, shot)
+				}
+			}
+			player.Shots = outShots
+
 			spawnT -= dt
 			if spawnT <= 0 {
 				spawnEnemy()
@@ -519,6 +640,16 @@ func main() {
 			}
 			for _, e := range enemies {
 				e.Update(dt, player.X, player.Y)
+				outEnemies := enemies[:0]
+				for _, e := range enemies {
+					if e.Alive {
+						outEnemies = append(outEnemies, e)
+					}
+				}
+				enemies = outEnemies
+			}
+			for _, s := range souls {
+				s.Update(dt, player.X, player.Y)
 			}
 
 			// Камера
@@ -546,7 +677,10 @@ func main() {
 			for _, e := range enemies {
 				e.Draw()
 			}
-			player.Draw()
+			for _, s := range souls {
+				s.Draw()
+			}
+			player.Draw(cam)
 			rl.EndMode2D()
 
 			// HUD
@@ -576,7 +710,7 @@ func main() {
 				e.Draw()
 			}
 			if player != nil {
-				player.Draw()
+				player.Draw(cam)
 			}
 			rl.EndMode2D()
 

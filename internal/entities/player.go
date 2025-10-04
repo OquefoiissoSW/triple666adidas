@@ -1,9 +1,10 @@
 package entities
 
 import (
+	"path/filepath"
+
 	"example.com/my2dgame/internal/anim"
 	rl "github.com/gen2brain/raylib-go/raylib"
-	"path/filepath"
 )
 
 type Player struct {
@@ -12,11 +13,19 @@ type Player struct {
 	Speed        float32
 	Idle         *anim.Clip
 	A            anim.Animator
-	Scale        float32 // << добавить
-	HP           int     // 0..100
-	Radius       float32 // для коллизий (окружность)
-	InvulnTimer  float32 // секунды неуязвимости после удара
+	Scale        float32
+	HP           int
+	Radius       float32
+	InvulnTimer  float32
 	HurtFlash    float32
+
+	// 🔫 Стрельба
+	Shots      []*Projectile
+	CanShoot   bool
+	FireTimer  float32
+	FirePeriod float32
+
+	Souls int
 }
 
 func NewPlayer(assetsRoot string) (*Player, error) {
@@ -33,6 +42,9 @@ func NewPlayer(assetsRoot string) (*Player, error) {
 		HP:     100,
 		Radius: 18,
 		// HurtFlash: 0, // по умолчанию
+
+		CanShoot:   true,
+		FirePeriod: 0.4,
 	}
 
 	p.PrevX, p.PrevY = p.X, p.Y
@@ -40,9 +52,10 @@ func NewPlayer(assetsRoot string) (*Player, error) {
 	return p, nil
 }
 
-func (p *Player) Update(dt float32) {
+func (p *Player) Update(dt float32, camera *rl.Camera2D) {
 	p.PrevX, p.PrevY = p.X, p.Y
 	moveX, moveY := float32(0), float32(0)
+
 	if rl.IsKeyDown(rl.KeyA) || rl.IsKeyDown(rl.KeyLeft) {
 		moveX -= 1
 	}
@@ -58,12 +71,11 @@ func (p *Player) Update(dt float32) {
 
 	// нормализация диагонали
 	if moveX != 0 && moveY != 0 {
-		moveX *= 0.70710678
-		moveY *= 0.70710678
+		moveX *= 0.7071
+		moveY *= 0.7071
 	}
 
-	// БАЗОВЫЙ КАДР СМОТРИТ ВЛЕВО:
-	// идём вправо -> нужно зеркалить; идём влево -> без флипа
+	// зеркалирование анимации
 	if moveX > 0 {
 		p.A.FlipX = true
 	}
@@ -74,6 +86,40 @@ func (p *Player) Update(dt float32) {
 	p.X += moveX * p.Speed * dt
 	p.Y += moveY * p.Speed * dt
 
+	// ⏳ таймер стрельбы
+	p.FireTimer -= dt
+
+	// 🔫 стрельба на ПКМ
+	p.FireTimer -= dt
+	if p.CanShoot && rl.IsMouseButtonDown(rl.MouseRightButton) && p.FireTimer <= 0 {
+		mouse := rl.GetMousePosition()
+		world := rl.GetScreenToWorld2D(mouse, *camera)
+
+		// Центр игрока
+		f := p.A.Current.Frames[p.A.FrameIndex]
+		centerX := p.X - float32(f.OrigX)*p.Scale + float32(f.Src.Width)*p.Scale/2
+		centerY := p.Y - float32(f.OrigY)*p.Scale + float32(f.Src.Height)*p.Scale/2
+
+		// Вектор направления от центра снаряда к курсору
+		dx := world.X - centerX
+		dy := world.Y - centerY
+
+		shot := NewGhostBolt(centerX, centerY, dx, dy)
+		p.Shots = append(p.Shots, shot)
+		p.FireTimer = p.FirePeriod
+	}
+
+	// обновляем все снаряды
+	out := p.Shots[:0]
+	for _, s := range p.Shots {
+		s.Update(dt)
+		if s.Alive {
+			out = append(out, s)
+		}
+	}
+	p.Shots = out
+
+	// таймеры игрока
 	p.A.Update(dt)
 	if p.InvulnTimer > 0 {
 		p.InvulnTimer -= dt
@@ -101,14 +147,30 @@ func (p *Player) TakeDamage(dmg int) {
 	p.HurtFlash = 0.25  // 🔴 250 мс красный флэш
 }
 
-func (p *Player) Draw() {
+func (p *Player) Draw(camera rl.Camera2D) {
 	tint := rl.White
 	if p.HurtFlash > 0 {
-		// вариант А: ровный красный флэш
 		tint = rl.NewColor(255, 64, 64, 255)
-
-		// вариант B (мигание 10 Гц):
-		// if int(p.HurtFlash*20)%2 == 0 { tint = rl.NewColor(255, 64, 64, 255) } else { tint = rl.White }
 	}
-	p.A.Draw(p.X, p.Y, p.Scale, tint)
+
+	// если есть текущий кадр — пересчитаем позицию для аниматора
+	if p.A.Current != nil && p.A.FrameIndex < len(p.A.Current.Frames) {
+		f := p.A.Current.Frames[p.A.FrameIndex]
+
+		// D = center + Orig*scale - (Width*scale)/2
+		drawX := p.X + float32(f.OrigX)*p.Scale - float32(f.Src.Width)*p.Scale/2
+		drawY := p.Y + float32(f.OrigY)*p.Scale - float32(f.Src.Height)*p.Scale/2
+
+		p.A.Draw(drawX, drawY, p.Scale, tint)
+	} else {
+		// запасной вариант
+		p.A.Draw(p.X, p.Y, p.Scale, tint)
+	}
+
+	// отрисовка снарядов с учётом камеры (пули в мировых координатах)
+	rl.BeginMode2D(camera)
+	for _, s := range p.Shots {
+		s.Draw()
+	}
+	rl.EndMode2D()
 }
