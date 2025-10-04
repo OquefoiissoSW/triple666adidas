@@ -33,28 +33,32 @@ func LoadProjectileAssets(assetsRoot string) error {
 }
 
 type Projectile struct {
-	X, Y   float32
-	VX, VY float32
-	Speed  float32
-	Life   float32
-	Alive  bool
-	Scale  float32
+	X, Y         float32
+	PrevX, PrevY float32 // <— НОВОЕ: позиция на предыдущем кадре
+	VX, VY       float32
+	Speed        float32
+	Life         float32
+	Alive        bool
+	Scale        float32
+	HitRadius    float32 // <— НОВОЕ: радиус хитбокса пули (в пикселях мира)
 }
 
 func NewSlimeBolt(x, y, dirX, dirY float32) *Projectile {
-	// нормализуем dir
 	l := float32(rl.Vector2Length(rl.NewVector2(dirX, dirY)))
 	if l == 0 {
 		l = 1
 	}
 	nx, ny := dirX/l, dirY/l
+	scale := float32(1.4) // как мы ставили раньше (-30% от 2.0)
 	return &Projectile{
 		X: x, Y: y,
+		PrevX: x, PrevY: y, // стартовое «предыдущее» = текущее
 		VX: nx, VY: ny,
-		Speed: 300, // скорость пули
-		Life:  3.0, // живёт 3 секунды
-		Alive: true,
-		Scale: 1.4, // масштаб отрисовки
+		Speed:     300,
+		Life:      3.0,
+		Alive:     true,
+		Scale:     scale,
+		HitRadius: 35 * scale, // подгони по bolt.png (8 — типовой базовый радиус)
 	}
 }
 
@@ -62,6 +66,7 @@ func (p *Projectile) Update(dt float32) {
 	if !p.Alive {
 		return
 	}
+	p.PrevX, p.PrevY = p.X, p.Y // <— НОВОЕ
 	p.X += p.VX * p.Speed * dt
 	p.Y += p.VY * p.Speed * dt
 	p.Life -= dt

@@ -2,6 +2,7 @@ package main
 
 import (
 	"example.com/my2dgame/internal/entities"
+	"example.com/my2dgame/internal/ui"
 	"example.com/my2dgame/internal/world"
 	"fmt"
 	"math"
@@ -83,6 +84,107 @@ func (b *Button) Draw() {
 	rl.DrawTextEx(uiFont, b.Label, rl.NewVector2(x, y), uiSize, uiSpacing, rl.Black)
 }
 
+func segmentCircleHit(ax, ay, bx, by, cx, cy, r float32) bool {
+	abx, aby := bx-ax, by-ay
+	acx, acy := cx-ax, cy-ay
+	ab2 := abx*abx + aby*aby
+	var t float32 = 0
+	if ab2 > 0 {
+		t = (acx*abx + acy*aby) / ab2
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+	}
+	px := ax + abx*t
+	py := ay + aby*t
+	dx := px - cx
+	dy := py - cy
+	return dx*dx+dy*dy <= r*r
+}
+
+// closest distance^2 between two line segments A(ax,ay)->B(bx,by) and C(cx,cy)->D(dx,dy)
+// closest distance^2 between two line segments A(ax,ay)->B(bx,by) and C(cx,cy)->D(dx,dy)
+func segSegDistSq(ax, ay, bx, by, cx, cy, dx, dy float32) float32 {
+	// vectors
+	ux, uy := bx-ax, by-ay
+	vx, vy := dx-cx, dy-cy
+	wx, wy := ax-cx, ay-cy
+
+	a := ux*ux + uy*uy // |u|^2
+	b := ux*vx + uy*vy // u·v
+	c := vx*vx + vy*vy // |v|^2
+	d := ux*wx + uy*wy // u·w
+	e := vx*wx + vy*wy // v·w
+	D := a*c - b*b
+
+	var sN, sD = D, D
+	var tN, tD = D, D
+
+	if D < 1e-8 {
+		// почти параллельны
+		sN = 0
+		sD = 1
+		tN = e
+		tD = c
+	} else {
+		sN = (b*e - c*d)
+		tN = (a*e - b*d)
+		// clamp sN to [0, sD]
+		if sN < 0 {
+			sN = 0
+		} else if sN > sD {
+			sN = sD
+		}
+	}
+
+	// clamp tN to [0, tD] и корректировка sN при необходимости
+	if tN < 0 {
+		tN = 0
+		if -d < 0 {
+			sN = 0
+			sD = 1
+		} else if -d > a {
+			sN = sD
+		} else {
+			sN = -d
+			sD = a
+		}
+	} else if tN > tD {
+		tN = tD
+		if (-d + b) < 0 {
+			sN = 0
+			sD = 1
+		} else if (-d + b) > a {
+			sN = sD
+		} else {
+			sN = (-d + b)
+			sD = a
+		}
+	}
+
+	// параметры на отрезках
+	var sc float32
+	if sD != 0 {
+		sc = sN / sD
+	}
+	var tc float32
+	if tD != 0 {
+		tc = tN / tD
+	}
+
+	// ближайшие точки
+	px := ax + sc*ux
+	py := ay + sc*uy
+	qx := cx + tc*vx
+	qy := cy + tc*vy
+
+	dx_ := px - qx
+	dy_ := py - qy
+	return dx_*dx_ + dy_*dy_
+}
+
 func main() {
 	// Полноэкранный старт
 	mon := rl.GetCurrentMonitor()
@@ -130,6 +232,16 @@ func main() {
 		add(0x2010, 0x205E)
 		return cps
 	}()
+	hud, err := ui.LoadHealthHUD(assetsRoot, 20, 60, 1.9) // позиция (20,60), масштаб 1.0
+	if err != nil {
+		fmt.Println("health hud:", err)
+	} // не фейлим игру, просто лог
+	defer func() {
+		if hud != nil {
+			hud.Unload()
+		}
+	}()
+
 	fontPath := filepath.Join(assetsRoot, "fonts", "NotoSans-Regular.ttf")
 	uiFont = rl.LoadFontEx(fontPath, int32(48), charset) // если нужно: , int32(len(charset))
 	rl.SetTextureFilter(uiFont.Texture, rl.FilterBilinear)
@@ -347,6 +459,59 @@ func main() {
 				}
 			}
 
+			// --- УРОН ---
+			// 1) Пули во врагах уже обновлены; проверим попадание по игроку
+			for _, e := range enemies {
+				if e.CanShoot {
+					for _, p := range e.Shots {
+						if !p.Alive {
+							continue
+						}
+						// расстояние между отрезком траектории пули и отрезком траектории игрока за кадр
+						r := player.Radius + p.HitRadius
+						dist2 := segSegDistSq(
+							p.PrevX, p.PrevY, p.X, p.Y,
+							player.PrevX, player.PrevY, player.X, player.Y,
+						)
+						if dist2 <= r*r {
+							p.Alive = false
+							player.TakeDamage(10)
+						}
+					}
+				}
+			}
+
+			// 2) Контактный урон ближника
+			for _, e := range enemies {
+				if e.Kind == "melee" {
+					dx := e.X - player.X
+					dy := e.Y - player.Y
+					r := player.Radius + e.MeleeRange
+					if dx*dx+dy*dy <= r*r {
+						// удар, если таймер атаки врага готов и игрок не в инвулне
+						if e.AttackTimer <= 0 && player.InvulnTimer <= 0 {
+							player.TakeDamage(e.ContactDamage)
+							e.AttackTimer = e.AttackCD
+						}
+					}
+				}
+			}
+
+			// 3) Если здоровье закончилось — простая «смерть» -> выход в меню
+			if player.HP <= 0 {
+				// стоп игровую музыку, включим меню
+				if hasGameMusic {
+					rl.StopMusicStream(gameMusic)
+				}
+				if hasMenuMusic {
+					rl.PlayMusicStream(menuMusic)
+				}
+				state = StateMenu
+				// можно тут же очистить врагов
+				enemies = enemies[:0]
+				continue
+			}
+
 			spawnT -= dt
 			if spawnT <= 0 {
 				spawnEnemy()
@@ -385,8 +550,14 @@ func main() {
 			rl.EndMode2D()
 
 			// HUD
-			hud := "Move: WASD/Arrows  |  Fullscreen: F11  |  Zoom: Wheel  |  Esc: пауза"
-			rl.DrawTextEx(uiFont, hud, rl.NewVector2(20, 20), 20, uiSpacing, rl.DarkGray)
+			if hud != nil {
+				hud.Draw(player.HP)
+			}
+
+			helpText := "Move: WASD/Arrows  |  Fullscreen: F11  |  Zoom: Wheel  |  Esc: пауза"
+			rl.DrawTextEx(uiFont, helpText, rl.NewVector2(20, 20), 20, uiSpacing, rl.DarkGray)
+
+			rl.DrawTextEx(uiFont, helpText, rl.NewVector2(20, 20), 20, uiSpacing, rl.DarkGray)
 			rl.DrawFPS(int32(rl.GetScreenWidth())-90, 10)
 
 			// Пауза
