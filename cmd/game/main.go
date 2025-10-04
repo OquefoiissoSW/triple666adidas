@@ -55,6 +55,7 @@ const (
 	StateMenu AppState = iota
 	StateGame
 	StatePause
+	StateDefeat
 )
 
 // -------- UI --------
@@ -259,6 +260,18 @@ func main() {
 		}
 	}()
 
+	// --- Экран поражения: фон ---
+	var defeatBG rl.Texture2D
+	if img := rl.LoadImage(filepath.Join(assetsRoot, "ui", "defeat.png")); img.Data != nil {
+		defeatBG = rl.LoadTextureFromImage(img)
+		rl.UnloadImage(img)
+	}
+	defer func() {
+		if defeatBG.ID != 0 {
+			rl.UnloadTexture(defeatBG)
+		}
+	}()
+
 	// Аудио
 	rl.InitAudioDevice()
 	defer rl.CloseAudioDevice()
@@ -291,8 +304,12 @@ func main() {
 	// Кнопки
 	btnPlay := Button{Label: "Играть"}
 	btnExit := Button{Label: "Выйти"}
+
 	btnResume := Button{Label: "Продолжить"}
 	btnToMenu := Button{Label: "Выйти в меню"}
+
+	btnRestart := Button{Label: "Начать заново"}
+	btnQuit := Button{Label: "Выйти из игры"}
 
 	state := StateMenu
 
@@ -499,17 +516,15 @@ func main() {
 
 			// 3) Если здоровье закончилось — простая «смерть» -> выход в меню
 			if player.HP <= 0 {
-				// стоп игровую музыку, включим меню
 				if hasGameMusic {
 					rl.StopMusicStream(gameMusic)
 				}
 				if hasMenuMusic {
 					rl.PlayMusicStream(menuMusic)
 				}
-				state = StateMenu
-				// можно тут же очистить врагов
+				state = StateDefeat
+				// можно очистить врагов, чтобы не мигали на фоне
 				enemies = enemies[:0]
-				continue
 			}
 
 			spawnT -= dt
@@ -626,6 +641,55 @@ func main() {
 			hint := "Enter/Esc — продолжить, ЛКМ — выбрать"
 			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
 			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
+
+		case StateDefeat:
+			// Фон поражения во весь экран
+			if defeatBG.ID != 0 {
+				src := rl.NewRectangle(0, 0, float32(defeatBG.Width), float32(defeatBG.Height))
+				dst := rl.NewRectangle(0, 0, float32(rl.GetScreenWidth()), float32(rl.GetScreenHeight()))
+				rl.DrawTexturePro(defeatBG, src, dst, rl.NewVector2(0, 0), 0, rl.White)
+			} else {
+				rl.ClearBackground(rl.DarkGreen) // запасной фон, если нет картинки
+			}
+
+			// Кнопки: «Начать заново» и «Выйти из игры»
+			bw, bh := float32(380), float32(78)
+			centerX := float32(rl.GetScreenWidth()) * 0.5
+			startY := float32(rl.GetScreenHeight())*0.60 - bh
+			spacing := float32(24)
+
+			btnRestart.Bounds = rl.NewRectangle(centerX-bw/2, startY, bw, bh)
+			btnQuit.Bounds = rl.NewRectangle(centerX-bw/2, startY+bh+spacing, bw, bh)
+
+			mx, my := float32(rl.GetMouseX()), float32(rl.GetMouseY())
+			btnRestart.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnRestart.Bounds)
+			btnQuit.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnQuit.Bounds)
+
+			btnRestart.Draw()
+			btnQuit.Draw()
+
+			// Управление
+			if rl.IsKeyPressed(rl.KeyEnter) || (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnRestart.Hot) {
+				if hasMenuMusic {
+					rl.StopMusicStream(menuMusic)
+				}
+				if hasGameMusic {
+					rl.PlayMusicStream(gameMusic)
+				}
+				startGame() // рестарт
+				break
+			}
+			if rl.IsKeyPressed(rl.KeyEscape) || (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnQuit.Hot) {
+				if hasMenuMusic {
+					rl.StopMusicStream(menuMusic)
+				}
+				if hasGameMusic {
+					rl.StopMusicStream(gameMusic)
+				}
+				rl.EndDrawing()
+				return
+			}
+
 		}
 
 		rl.EndDrawing()
