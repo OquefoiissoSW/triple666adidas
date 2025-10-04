@@ -1,0 +1,411 @@
+package main
+
+import (
+	"example.com/my2dgame/internal/entities"
+	"example.com/my2dgame/internal/world"
+	"fmt"
+	"math"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"time"
+
+	rl "github.com/gen2brain/raylib-go/raylib"
+)
+
+func findAssets() string {
+	wd, _ := os.Getwd()
+	dir := wd
+	for i := 0; i < 5; i++ {
+		try := filepath.Join(dir, "assets")
+		if st, err := os.Stat(try); err == nil && st.IsDir() {
+			return try
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		try := filepath.Join(exeDir, "assets")
+		if st, err := os.Stat(try); err == nil && st.IsDir() {
+			return try
+		}
+	}
+	return "assets"
+}
+
+type AppState int
+
+const (
+	StateMenu AppState = iota
+	StateGame
+)
+
+// -------- UI: шрифт и кнопка --------
+var uiFont rl.Font
+
+const uiSize float32 = 28
+const uiSpacing float32 = 1
+
+type Button struct {
+	Bounds rl.Rectangle
+	Label  string
+	Hot    bool
+}
+
+func (b *Button) Draw() {
+	col := rl.NewColor(255, 255, 255, 200)
+	border := rl.Black
+	if b.Hot {
+		col = rl.NewColor(255, 255, 255, 240)
+		border = rl.DarkGray
+	}
+	rl.DrawRectangleRounded(b.Bounds, 0.2, 8, col)
+	rl.DrawRectangleRoundedLines(b.Bounds, 0.2, 8, border)
+
+	// Текст по центру (TTF)
+	ts := rl.MeasureTextEx(uiFont, b.Label, uiSize, uiSpacing)
+	x := b.Bounds.X + b.Bounds.Width/2 - ts.X/2
+	y := b.Bounds.Y + b.Bounds.Height/2 - ts.Y/2
+	rl.DrawTextEx(uiFont, b.Label, rl.NewVector2(x, y), uiSize, uiSpacing, rl.Black)
+}
+
+func main() {
+	// Полноэкранный старт на текущем мониторе
+	mon := rl.GetCurrentMonitor()
+	W := int32(rl.GetMonitorWidth(mon))
+	H := int32(rl.GetMonitorHeight(mon))
+
+	rl.SetConfigFlags(rl.FlagVsyncHint)
+	rl.InitWindow(W, H, "My 2D Game — Menu + Game + Music")
+	rl.ToggleFullscreen()
+	defer rl.CloseWindow()
+	rl.SetTargetFPS(60)
+
+	rand.Seed(time.Now().UnixNano())
+
+	bg := rl.NewColor(240, 243, 248, 255)
+	assetsRoot := findAssets()
+	wrld, err := world.Load(assetsRoot, filepath.Join("textures", "tiles", "tile.png"), 128, 200, 200)
+	if err != nil {
+		fmt.Println("world:", err)
+		return
+	}
+	defer wrld.Unload()
+	if err := entities.LoadProjectileAssets(assetsRoot); err != nil {
+		fmt.Println("projectiles:", err)
+	}
+
+	// --- Шрифт с кириллицей (TTF) ---
+	charset := func() []int32 {
+		cps := make([]int32, 0, 1024)
+		add := func(a, b int32) {
+			for cp := a; cp <= b; cp++ {
+				cps = append(cps, cp)
+			}
+		}
+		add(0x0020, 0x007E) // ASCII
+		add(0x0400, 0x04FF) // Кириллица
+		add(0x0500, 0x052F) // Кириллица доп.
+		add(0x2DE0, 0x2DFF) // Ext-A
+		add(0xA640, 0xA69F) // Ext-B
+		add(0x2010, 0x205E) // тире/кавычки/прочие
+		return cps
+	}()
+	fontPath := filepath.Join(assetsRoot, "fonts", "NotoSans-Regular.ttf")
+	uiFont = rl.LoadFontEx(fontPath, int32(48), charset) // если требуется glyphCount: добавь , int32(len(charset))
+	rl.SetTextureFilter(uiFont.Texture, rl.FilterBilinear)
+	defer rl.UnloadFont(uiFont)
+
+	// --- Меню: фон ---
+	var menuBG rl.Texture2D
+	if img := rl.LoadImage(filepath.Join(assetsRoot, "ui", "menu_bg.png")); img.Data != nil {
+		menuBG = rl.LoadTextureFromImage(img)
+		rl.UnloadImage(img)
+	}
+	defer func() {
+		if menuBG.ID != 0 {
+			rl.UnloadTexture(menuBG)
+		}
+	}()
+
+	// --- Аудио: меню и игра ---
+	rl.InitAudioDevice()
+	defer rl.CloseAudioDevice()
+
+	var (
+		menuMusic    rl.Music
+		gameMusic    rl.Music
+		hasMenuMusic bool
+		hasGameMusic bool
+	)
+	if _, err := os.Stat(filepath.Join(assetsRoot, "music", "menu.mp3")); err == nil {
+		menuMusic = rl.LoadMusicStream(filepath.Join(assetsRoot, "music", "menu.mp3"))
+		menuMusic.Looping = true
+		rl.SetMusicVolume(menuMusic, 0.7)
+		rl.PlayMusicStream(menuMusic)
+		hasMenuMusic = true
+	}
+	if _, err := os.Stat(filepath.Join(assetsRoot, "music", "game.mp3")); err == nil {
+		gameMusic = rl.LoadMusicStream(filepath.Join(assetsRoot, "music", "game.mp3"))
+		gameMusic.Looping = true
+		rl.SetMusicVolume(gameMusic, 0.6)
+		hasGameMusic = true
+	}
+	defer func() {
+		if hasMenuMusic {
+			rl.UnloadMusicStream(menuMusic)
+		}
+		if hasGameMusic {
+			rl.UnloadMusicStream(gameMusic)
+		}
+	}()
+
+	// Кнопки меню
+	btnPlay := Button{Label: "Играть"}
+	btnExit := Button{Label: "Выйти"}
+
+	state := StateMenu
+
+	// --- ИГРА ---
+	var (
+		player     *entities.Player
+		enemies    []*entities.Enemy
+		spawnT     float32
+		spawnEvery = float32(2.0)
+		cam        rl.Camera2D
+	)
+
+	startGame := func() {
+		p, err := entities.NewPlayer(assetsRoot)
+		// поставить игрока в центр мира
+		wpx, hpx := wrld.SizePx() // размеры мира в пикселях
+		p.X = wpx * 0.5
+		p.Y = hpx * 0.5
+
+		if err != nil {
+			fmt.Println("player load:", err)
+			return
+		}
+		player = p
+		enemies = make([]*entities.Enemy, 0, 64)
+		spawnT = 0
+		cam = rl.Camera2D{
+			Target: rl.NewVector2(player.X, player.Y),
+			Offset: rl.NewVector2(float32(rl.GetScreenWidth())/2, float32(rl.GetScreenHeight())/2),
+			Zoom:   1.0,
+		}
+		// музыка: стоп меню, старт игры
+		if hasMenuMusic {
+			rl.StopMusicStream(menuMusic)
+		}
+		if hasGameMusic {
+			rl.PlayMusicStream(gameMusic)
+		}
+		state = StateGame
+	}
+
+	spawnEnemy := func() {
+		r := float32(600)
+		ang := rand.Float64() * 2 * math.Pi
+		sx := player.X + r*float32(math.Cos(ang))
+		sy := player.Y + r*float32(math.Sin(ang))
+
+		// 50/50: ближник или новый враг
+		kind := "melee"
+		speed := float32(80)
+		scale := float32(2.25) // 25% меньше базового 3.0
+
+		if rand.Intn(2) == 0 {
+			kind = "slime"
+			speed = 70   // пример: новый враг медленнее
+			scale = 2.25 // тоже уменьшен на 25%
+		}
+
+		if e, err := entities.NewEnemyKind(assetsRoot, kind, sx, sy, speed, scale); err == nil {
+			enemies = append(enemies, e)
+		} else {
+			fmt.Println("enemy load:", err)
+		}
+	}
+
+	for !rl.WindowShouldClose() {
+		dt := float32(rl.GetFrameTime())
+
+		// переключение Fullscreen
+		if rl.IsKeyPressed(rl.KeyF11) {
+			rl.ToggleFullscreen()
+		}
+
+		// обновление музыки (нужно вызывать каждый кадр)
+		if hasMenuMusic {
+			rl.UpdateMusicStream(menuMusic)
+		}
+		if hasGameMusic {
+			rl.UpdateMusicStream(gameMusic)
+		}
+
+		rl.BeginDrawing()
+		rl.ClearBackground(bg)
+
+		switch state {
+		case StateMenu:
+			// Фон меню
+			if menuBG.ID != 0 {
+				src := rl.NewRectangle(0, 0, float32(menuBG.Width), float32(menuBG.Height))
+				dst := rl.NewRectangle(0, 0, float32(rl.GetScreenWidth()), float32(rl.GetScreenHeight()))
+				rl.DrawTexturePro(menuBG, src, dst, rl.NewVector2(0, 0), 0, rl.White)
+			} else {
+				rl.ClearBackground(rl.DarkGreen)
+			}
+
+			// Позиции кнопок
+			bw, bh := float32(320), float32(70)
+			centerX := float32(rl.GetScreenWidth()) * 0.5
+			startY := float32(rl.GetScreenHeight())*0.6 - bh
+			spacing := float32(20)
+
+			btnPlay.Bounds = rl.NewRectangle(centerX-bw/2, startY, bw, bh)
+			btnExit.Bounds = rl.NewRectangle(centerX-bw/2, startY+bh+spacing, bw, bh)
+
+			// Hover
+			mx, my := float32(rl.GetMouseX()), float32(rl.GetMouseY())
+			btnPlay.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnPlay.Bounds)
+			btnExit.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnExit.Bounds)
+
+			// Click / Enter / Esc
+			if rl.IsMouseButtonPressed(rl.MouseLeftButton) || rl.IsKeyPressed(rl.KeyEnter) {
+				if btnPlay.Hot || rl.IsKeyPressed(rl.KeyEnter) {
+					startGame()
+				}
+			}
+			if (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnExit.Hot) || rl.IsKeyPressed(rl.KeyEscape) {
+				// стоп возможной музыки перед выходом
+				if hasMenuMusic {
+					rl.StopMusicStream(menuMusic)
+				}
+				if hasGameMusic {
+					rl.StopMusicStream(gameMusic)
+				}
+				rl.EndDrawing()
+				return
+			}
+
+			// Заголовок
+			title := "666adididas"
+			ts := rl.MeasureTextEx(uiFont, title, 48, uiSpacing)
+			tx := float32(rl.GetScreenWidth())*0.5 - ts.X*0.5
+			ty := float32(rl.GetScreenHeight()) * 0.25
+			rl.DrawTextEx(uiFont, title, rl.NewVector2(tx, ty), 48, uiSpacing, rl.White)
+
+			// Кнопки
+			btnPlay.Draw()
+			btnExit.Draw()
+
+			// Подсказка
+			hint := "Enter — Играть, Esc — Выйти"
+			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
+			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
+
+		case StateGame:
+			// Зум колесом
+			cam.Zoom += rl.GetMouseWheelMove() * 0.05
+			if cam.Zoom < 0.3 {
+				cam.Zoom = 0.3
+			}
+			if cam.Zoom > 3.0 {
+				cam.Zoom = 3.0
+			}
+
+			// Update
+			player.Update(dt)
+
+			// ограничение игрока границами мира
+			player.X, player.Y = wrld.Clamp(player.X, player.Y)
+
+			// ограничение врагов и зачистка снарядов за пределами мира
+			wpx, hpx := wrld.SizePx()
+			for _, e := range enemies {
+				e.X, e.Y = wrld.Clamp(e.X, e.Y)
+				if e.CanShoot { // если есть пули — чистим те, что улетели за мир
+					out := e.Shots[:0]
+					for _, p := range e.Shots {
+						if p.X < 0 || p.Y < 0 || p.X > wpx || p.Y > hpx {
+							p.Alive = false
+						}
+						if p.Alive {
+							out = append(out, p)
+						}
+					}
+					e.Shots = out
+				}
+			}
+
+			spawnT -= dt
+			if spawnT <= 0 {
+				spawnEnemy()
+				spawnT = spawnEvery
+			}
+			for _, e := range enemies {
+				e.Update(dt, player.X, player.Y)
+			}
+
+			// Камера следует за игроком
+			cam.Target = rl.NewVector2(player.X, player.Y)
+
+			// clamp камеры, чтобы не показывать пустоту
+			halfW := (float32(rl.GetScreenWidth()) / 2) / cam.Zoom
+			halfH := (float32(rl.GetScreenHeight()) / 2) / cam.Zoom
+			cx, cy := cam.Target.X, cam.Target.Y
+			if cx < halfW {
+				cx = halfW
+			}
+			if cy < halfH {
+				cy = halfH
+			}
+			if cx > wpx-halfW {
+				cx = wpx - halfW
+			}
+			if cy > hpx-halfH {
+				cy = hpx - halfH
+			}
+			cam.Target = rl.NewVector2(cx, cy)
+
+			// Рисование мира
+			rl.BeginMode2D(cam)
+
+			rl.BeginMode2D(cam)
+
+			// сначала фон-тайлы
+			wrld.Draw(cam)
+
+			for _, e := range enemies {
+				e.Draw()
+			}
+			player.Draw()
+			rl.EndMode2D()
+
+			// HUD
+			hud := "Move: WASD/Arrows  |  Fullscreen: F11  |  Zoom: Wheel  |  Esc: в меню"
+			rl.DrawTextEx(uiFont, hud, rl.NewVector2(20, 20), 20, uiSpacing, rl.DarkGray)
+			rl.DrawFPS(int32(rl.GetScreenWidth())-90, 10)
+
+			// Назад в меню
+			if rl.IsKeyPressed(rl.KeyEscape) {
+				// музыка: стоп игры, старт меню
+				if hasGameMusic {
+					rl.StopMusicStream(gameMusic)
+				}
+				if hasMenuMusic {
+					rl.PlayMusicStream(menuMusic)
+				}
+				state = StateMenu
+			}
+		}
+
+		rl.EndDrawing()
+	}
+}

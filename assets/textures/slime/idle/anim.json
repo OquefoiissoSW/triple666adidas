@@ -1,0 +1,15 @@
+{
+  "name": "idle",
+  "type": "sheet",
+  "image": "sheet.png",
+  "frameWidth": 88,
+  "frameHeight": 68,
+  "rows": 1,
+  "cols": 6,
+  "fps": 10,
+  "loop": true,
+  "origin": [
+    44,
+    57
+  ]
+}
