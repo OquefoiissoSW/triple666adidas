@@ -11,6 +11,7 @@ type Player struct {
 	Speed float32
 	Idle  *anim.Clip
 	A     anim.Animator
+	Scale float32 // << добавить
 }
 
 func NewPlayer(assetsRoot string) (*Player, error) {
@@ -21,8 +22,9 @@ func NewPlayer(assetsRoot string) (*Player, error) {
 
 	p := &Player{
 		X: 200, Y: 300,
-		Speed: 320, // было 200, +25%
+		Speed: 300, // твой повышенный спид оставил
 		Idle:  clip,
+		Scale: 1.25, // было 3.0, теперь ~в 2.4 раза меньше
 	}
 	p.A.Play(p.Idle, true)
 	return p, nil
@@ -65,5 +67,5 @@ func (p *Player) Update(dt float32) {
 }
 
 func (p *Player) Draw() {
-	p.A.Draw(p.X, p.Y, 3, rl.White)
+	p.A.Draw(p.X, p.Y, p.Scale, rl.White)
 }
