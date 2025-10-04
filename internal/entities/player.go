@@ -21,7 +21,7 @@ func NewPlayer(assetsRoot string) (*Player, error) {
 
 	p := &Player{
 		X: 200, Y: 300,
-		Speed: 250, // было 200, +25%
+		Speed: 320, // было 200, +25%
 		Idle:  clip,
 	}
 	p.A.Play(p.Idle, true)
@@ -43,15 +43,18 @@ func (p *Player) Update(dt float32) {
 		moveY += 1
 	}
 
+	// нормализация диагонали
 	if moveX != 0 && moveY != 0 {
 		moveX *= 0.70710678
 		moveY *= 0.70710678
 	}
 
-	if moveX < 0 {
+	// БАЗОВЫЙ КАДР СМОТРИТ ВЛЕВО:
+	// идём вправо -> нужно зеркалить; идём влево -> без флипа
+	if moveX > 0 {
 		p.A.FlipX = true
 	}
-	if moveX > 0 {
+	if moveX < 0 {
 		p.A.FlipX = false
 	}
 
