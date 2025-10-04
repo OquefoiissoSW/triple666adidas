@@ -13,6 +13,17 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
+func fitCameraToWorld(cam *rl.Camera2D, worldW, worldH float32) {
+	sw := float32(rl.GetScreenWidth())
+	sh := float32(rl.GetScreenHeight())
+	minZoomX := sw / worldW
+	minZoomY := sh / worldH
+	minZoom := float32(math.Max(float64(minZoomX), float64(minZoomY)))
+	if cam.Zoom < minZoom {
+		cam.Zoom = minZoom
+	}
+}
+
 func findAssets() string {
 	wd, _ := os.Getwd()
 	dir := wd
@@ -42,9 +53,10 @@ type AppState int
 const (
 	StateMenu AppState = iota
 	StateGame
+	StatePause
 )
 
-// -------- UI: шрифт и кнопка --------
+// -------- UI --------
 var uiFont rl.Font
 
 const uiSize float32 = 28
@@ -65,8 +77,6 @@ func (b *Button) Draw() {
 	}
 	rl.DrawRectangleRounded(b.Bounds, 0.2, 8, col)
 	rl.DrawRectangleRoundedLines(b.Bounds, 0.2, 8, border)
-
-	// Текст по центру (TTF)
 	ts := rl.MeasureTextEx(uiFont, b.Label, uiSize, uiSpacing)
 	x := b.Bounds.X + b.Bounds.Width/2 - ts.X/2
 	y := b.Bounds.Y + b.Bounds.Height/2 - ts.Y/2
@@ -74,32 +84,37 @@ func (b *Button) Draw() {
 }
 
 func main() {
-	// Полноэкранный старт на текущем мониторе
+	// Полноэкранный старт
 	mon := rl.GetCurrentMonitor()
 	W := int32(rl.GetMonitorWidth(mon))
 	H := int32(rl.GetMonitorHeight(mon))
-
 	rl.SetConfigFlags(rl.FlagVsyncHint)
 	rl.InitWindow(W, H, "My 2D Game — Menu + Game + Music")
 	rl.ToggleFullscreen()
+
+	rl.SetExitKey(rl.KeyNull)
+
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
 	rand.Seed(time.Now().UnixNano())
-
 	bg := rl.NewColor(240, 243, 248, 255)
 	assetsRoot := findAssets()
-	wrld, err := world.Load(assetsRoot, filepath.Join("textures", "tiles", "tile.png"), 128, 200, 200)
+
+	// Мир (фон-карта). Если мылится — уменьшай scale.
+	wrld, err := world.LoadBackdrop(assetsRoot, filepath.Join("textures", "maps", "village.png"), 3.0)
 	if err != nil {
 		fmt.Println("world:", err)
 		return
 	}
 	defer wrld.Unload()
+
+	// Проектайлы
 	if err := entities.LoadProjectileAssets(assetsRoot); err != nil {
 		fmt.Println("projectiles:", err)
 	}
 
-	// --- Шрифт с кириллицей (TTF) ---
+	// Шрифт
 	charset := func() []int32 {
 		cps := make([]int32, 0, 1024)
 		add := func(a, b int32) {
@@ -107,20 +122,20 @@ func main() {
 				cps = append(cps, cp)
 			}
 		}
-		add(0x0020, 0x007E) // ASCII
-		add(0x0400, 0x04FF) // Кириллица
-		add(0x0500, 0x052F) // Кириллица доп.
-		add(0x2DE0, 0x2DFF) // Ext-A
-		add(0xA640, 0xA69F) // Ext-B
-		add(0x2010, 0x205E) // тире/кавычки/прочие
+		add(0x0020, 0x007E)
+		add(0x0400, 0x04FF)
+		add(0x0500, 0x052F)
+		add(0x2DE0, 0x2DFF)
+		add(0xA640, 0xA69F)
+		add(0x2010, 0x205E)
 		return cps
 	}()
 	fontPath := filepath.Join(assetsRoot, "fonts", "NotoSans-Regular.ttf")
-	uiFont = rl.LoadFontEx(fontPath, int32(48), charset) // если требуется glyphCount: добавь , int32(len(charset))
+	uiFont = rl.LoadFontEx(fontPath, int32(48), charset) // если нужно: , int32(len(charset))
 	rl.SetTextureFilter(uiFont.Texture, rl.FilterBilinear)
 	defer rl.UnloadFont(uiFont)
 
-	// --- Меню: фон ---
+	// Фон меню
 	var menuBG rl.Texture2D
 	if img := rl.LoadImage(filepath.Join(assetsRoot, "ui", "menu_bg.png")); img.Data != nil {
 		menuBG = rl.LoadTextureFromImage(img)
@@ -132,15 +147,12 @@ func main() {
 		}
 	}()
 
-	// --- Аудио: меню и игра ---
+	// Аудио
 	rl.InitAudioDevice()
 	defer rl.CloseAudioDevice()
-
 	var (
-		menuMusic    rl.Music
-		gameMusic    rl.Music
-		hasMenuMusic bool
-		hasGameMusic bool
+		menuMusic, gameMusic       rl.Music
+		hasMenuMusic, hasGameMusic bool
 	)
 	if _, err := os.Stat(filepath.Join(assetsRoot, "music", "menu.mp3")); err == nil {
 		menuMusic = rl.LoadMusicStream(filepath.Join(assetsRoot, "music", "menu.mp3"))
@@ -164,9 +176,11 @@ func main() {
 		}
 	}()
 
-	// Кнопки меню
+	// Кнопки
 	btnPlay := Button{Label: "Играть"}
 	btnExit := Button{Label: "Выйти"}
+	btnResume := Button{Label: "Продолжить"}
+	btnToMenu := Button{Label: "Выйти в меню"}
 
 	state := StateMenu
 
@@ -181,15 +195,15 @@ func main() {
 
 	startGame := func() {
 		p, err := entities.NewPlayer(assetsRoot)
-		// поставить игрока в центр мира
-		wpx, hpx := wrld.SizePx() // размеры мира в пикселях
-		p.X = wpx * 0.5
-		p.Y = hpx * 0.5
-
 		if err != nil {
 			fmt.Println("player load:", err)
 			return
 		}
+
+		// центр спавна
+		wpx, hpx := wrld.SizePx()
+		p.X, p.Y = wpx*0.5, hpx*0.5
+
 		player = p
 		enemies = make([]*entities.Enemy, 0, 64)
 		spawnT = 0
@@ -198,7 +212,10 @@ func main() {
 			Offset: rl.NewVector2(float32(rl.GetScreenWidth())/2, float32(rl.GetScreenHeight())/2),
 			Zoom:   1.0,
 		}
-		// музыка: стоп меню, старт игры
+		// гарантируем, что экран помещается в мире
+		fitCameraToWorld(&cam, wpx, hpx)
+
+		// музыка
 		if hasMenuMusic {
 			rl.StopMusicStream(menuMusic)
 		}
@@ -214,15 +231,13 @@ func main() {
 		sx := player.X + r*float32(math.Cos(ang))
 		sy := player.Y + r*float32(math.Sin(ang))
 
-		// 50/50: ближник или новый враг
 		kind := "melee"
 		speed := float32(80)
-		scale := float32(2.25) // 25% меньше базового 3.0
-
+		scale := float32(1.2)
 		if rand.Intn(2) == 0 {
 			kind = "slime"
-			speed = 70   // пример: новый враг медленнее
-			scale = 2.25 // тоже уменьшен на 25%
+			speed = 70
+			scale = 1.2
 		}
 
 		if e, err := entities.NewEnemyKind(assetsRoot, kind, sx, sy, speed, scale); err == nil {
@@ -235,12 +250,10 @@ func main() {
 	for !rl.WindowShouldClose() {
 		dt := float32(rl.GetFrameTime())
 
-		// переключение Fullscreen
 		if rl.IsKeyPressed(rl.KeyF11) {
 			rl.ToggleFullscreen()
 		}
 
-		// обновление музыки (нужно вызывать каждый кадр)
 		if hasMenuMusic {
 			rl.UpdateMusicStream(menuMusic)
 		}
@@ -253,7 +266,6 @@ func main() {
 
 		switch state {
 		case StateMenu:
-			// Фон меню
 			if menuBG.ID != 0 {
 				src := rl.NewRectangle(0, 0, float32(menuBG.Width), float32(menuBG.Height))
 				dst := rl.NewRectangle(0, 0, float32(rl.GetScreenWidth()), float32(rl.GetScreenHeight()))
@@ -262,7 +274,6 @@ func main() {
 				rl.ClearBackground(rl.DarkGreen)
 			}
 
-			// Позиции кнопок
 			bw, bh := float32(320), float32(70)
 			centerX := float32(rl.GetScreenWidth()) * 0.5
 			startY := float32(rl.GetScreenHeight())*0.6 - bh
@@ -271,19 +282,16 @@ func main() {
 			btnPlay.Bounds = rl.NewRectangle(centerX-bw/2, startY, bw, bh)
 			btnExit.Bounds = rl.NewRectangle(centerX-bw/2, startY+bh+spacing, bw, bh)
 
-			// Hover
 			mx, my := float32(rl.GetMouseX()), float32(rl.GetMouseY())
 			btnPlay.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnPlay.Bounds)
 			btnExit.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnExit.Bounds)
 
-			// Click / Enter / Esc
 			if rl.IsMouseButtonPressed(rl.MouseLeftButton) || rl.IsKeyPressed(rl.KeyEnter) {
 				if btnPlay.Hot || rl.IsKeyPressed(rl.KeyEnter) {
 					startGame()
 				}
 			}
 			if (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnExit.Hot) || rl.IsKeyPressed(rl.KeyEscape) {
-				// стоп возможной музыки перед выходом
 				if hasMenuMusic {
 					rl.StopMusicStream(menuMusic)
 				}
@@ -294,24 +302,21 @@ func main() {
 				return
 			}
 
-			// Заголовок
 			title := "666adididas"
 			ts := rl.MeasureTextEx(uiFont, title, 48, uiSpacing)
 			tx := float32(rl.GetScreenWidth())*0.5 - ts.X*0.5
 			ty := float32(rl.GetScreenHeight()) * 0.25
 			rl.DrawTextEx(uiFont, title, rl.NewVector2(tx, ty), 48, uiSpacing, rl.White)
 
-			// Кнопки
 			btnPlay.Draw()
 			btnExit.Draw()
 
-			// Подсказка
 			hint := "Enter — Играть, Esc — Выйти"
 			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
 			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
 
 		case StateGame:
-			// Зум колесом
+			// Зум колесом + ограничение, чтобы мир не был уже экрана
 			cam.Zoom += rl.GetMouseWheelMove() * 0.05
 			if cam.Zoom < 0.3 {
 				cam.Zoom = 0.3
@@ -319,18 +324,16 @@ func main() {
 			if cam.Zoom > 3.0 {
 				cam.Zoom = 3.0
 			}
+			wpx, hpx := wrld.SizePx()
+			fitCameraToWorld(&cam, wpx, hpx)
 
 			// Update
 			player.Update(dt)
-
-			// ограничение игрока границами мира
 			player.X, player.Y = wrld.Clamp(player.X, player.Y)
 
-			// ограничение врагов и зачистка снарядов за пределами мира
-			wpx, hpx := wrld.SizePx()
 			for _, e := range enemies {
 				e.X, e.Y = wrld.Clamp(e.X, e.Y)
-				if e.CanShoot { // если есть пули — чистим те, что улетели за мир
+				if e.CanShoot {
 					out := e.Shots[:0]
 					for _, p := range e.Shots {
 						if p.X < 0 || p.Y < 0 || p.X > wpx || p.Y > hpx {
@@ -353,10 +356,8 @@ func main() {
 				e.Update(dt, player.X, player.Y)
 			}
 
-			// Камера следует за игроком
+			// Камера
 			cam.Target = rl.NewVector2(player.X, player.Y)
-
-			// clamp камеры, чтобы не показывать пустоту
 			halfW := (float32(rl.GetScreenWidth()) / 2) / cam.Zoom
 			halfH := (float32(rl.GetScreenHeight()) / 2) / cam.Zoom
 			cx, cy := cam.Target.X, cam.Target.Y
@@ -374,14 +375,9 @@ func main() {
 			}
 			cam.Target = rl.NewVector2(cx, cy)
 
-			// Рисование мира
+			// Рисование мира и объектов
 			rl.BeginMode2D(cam)
-
-			rl.BeginMode2D(cam)
-
-			// сначала фон-тайлы
 			wrld.Draw(cam)
-
 			for _, e := range enemies {
 				e.Draw()
 			}
@@ -389,13 +385,64 @@ func main() {
 			rl.EndMode2D()
 
 			// HUD
-			hud := "Move: WASD/Arrows  |  Fullscreen: F11  |  Zoom: Wheel  |  Esc: в меню"
+			hud := "Move: WASD/Arrows  |  Fullscreen: F11  |  Zoom: Wheel  |  Esc: пауза"
 			rl.DrawTextEx(uiFont, hud, rl.NewVector2(20, 20), 20, uiSpacing, rl.DarkGray)
 			rl.DrawFPS(int32(rl.GetScreenWidth())-90, 10)
 
-			// Назад в меню
+			// Пауза
 			if rl.IsKeyPressed(rl.KeyEscape) {
-				// музыка: стоп игры, старт меню
+				if hasGameMusic {
+					rl.PauseMusicStream(gameMusic)
+				}
+				state = StatePause
+			}
+
+		case StatePause:
+			// Фон замороженной игры
+			rl.BeginMode2D(cam)
+			wrld.Draw(cam)
+			for _, e := range enemies {
+				e.Draw()
+			}
+			if player != nil {
+				player.Draw()
+			}
+			rl.EndMode2D()
+
+			// Вуаль
+			rl.DrawRectangle(0, 0, int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight()),
+				rl.NewColor(0, 0, 0, 160))
+			// Заголовок
+			title := "Пауза"
+			ts := rl.MeasureTextEx(uiFont, title, 48, uiSpacing)
+			tx := float32(rl.GetScreenWidth())*0.5 - ts.X*0.5
+			ty := float32(rl.GetScreenHeight()) * 0.28
+			rl.DrawTextEx(uiFont, title, rl.NewVector2(tx, ty), 48, uiSpacing, rl.White)
+
+			// Кнопки
+			bw, bh := float32(360), float32(74)
+			centerX := float32(rl.GetScreenWidth()) * 0.5
+			startY := float32(rl.GetScreenHeight())*0.45 - bh
+			spacing := float32(22)
+			btnResume.Bounds = rl.NewRectangle(centerX-bw/2, startY, bw, bh)
+			btnToMenu.Bounds = rl.NewRectangle(centerX-bw/2, startY+bh+spacing, bw, bh)
+
+			mx, my := float32(rl.GetMouseX()), float32(rl.GetMouseY())
+			btnResume.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnResume.Bounds)
+			btnToMenu.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnToMenu.Bounds)
+
+			btnResume.Draw()
+			btnToMenu.Draw()
+
+			// Управление
+			if rl.IsKeyPressed(rl.KeyEscape) || rl.IsKeyPressed(rl.KeyEnter) ||
+				(rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnResume.Hot) {
+				if hasGameMusic {
+					rl.ResumeMusicStream(gameMusic)
+				}
+				state = StateGame
+			}
+			if rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnToMenu.Hot {
 				if hasGameMusic {
 					rl.StopMusicStream(gameMusic)
 				}
@@ -404,6 +451,10 @@ func main() {
 				}
 				state = StateMenu
 			}
+
+			hint := "Enter/Esc — продолжить, ЛКМ — выбрать"
+			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
+			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
 		}
 
 		rl.EndDrawing()
