@@ -71,6 +71,8 @@ type Button struct {
 	Hot    bool
 }
 
+var cursorTexture rl.Texture2D
+
 func (b *Button) Draw() {
 	col := rl.NewColor(255, 255, 255, 200)
 	border := rl.Black
@@ -187,6 +189,12 @@ func segSegDistSq(ax, ay, bx, by, cx, cy, dx, dy float32) float32 {
 	return dx_*dx_ + dy_*dy_
 }
 
+func DrawCursor() {
+	mousePos := rl.GetMousePosition()
+	offset := rl.NewVector2(16, 16) // смещение "горячей точки" курсора
+	rl.DrawTextureV(cursorTexture, rl.Vector2Subtract(mousePos, offset), rl.White)
+}
+
 func main() {
 	// Полноэкранный старт
 	mon := rl.GetCurrentMonitor()
@@ -217,6 +225,8 @@ func main() {
 	if err := entities.LoadProjectileAssets(assetsRoot); err != nil {
 		fmt.Println("projectiles:", err)
 	}
+
+	rl.HideCursor()
 
 	// Шрифт
 	charset := func() []int32 {
@@ -268,6 +278,16 @@ func main() {
 	defer func() {
 		if menuBG.ID != 0 {
 			rl.UnloadTexture(menuBG)
+		}
+	}()
+
+	if img := rl.LoadImage(filepath.Join(assetsRoot, "ui", "cursor.png")); img.Data != nil {
+		cursorTexture = rl.LoadTextureFromImage(img)
+		rl.UnloadImage(img)
+	}
+	defer func() {
+		if cursorTexture.ID != 0 {
+			rl.UnloadTexture(cursorTexture)
 		}
 	}()
 
@@ -452,6 +472,7 @@ func main() {
 			hint := "Enter — Играть, Esc — Выйти"
 			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
 			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
+			DrawCursor()
 
 		case StateGame:
 			// Зум колесом + ограничение, чтобы мир не был уже экрана
@@ -761,8 +782,11 @@ func main() {
 				state = StatePause
 			}
 
+			DrawCursor()
+
 		case StatePause:
 			// Фон замороженной игры
+
 			rl.BeginMode2D(cam)
 			wrld.Draw(cam)
 			for _, e := range enemies {
@@ -819,6 +843,7 @@ func main() {
 			hint := "Enter/Esc — продолжить, ЛКМ — выбрать"
 			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
 			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
+			DrawCursor()
 
 		case StateDefeat:
 			// фон
@@ -866,6 +891,7 @@ func main() {
 				rl.EndDrawing()
 				return
 			}
+			DrawCursor()
 
 		}
 
