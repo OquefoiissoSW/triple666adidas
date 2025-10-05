@@ -56,6 +56,7 @@ const (
 	StateMenu AppState = iota
 	StateGame
 	StatePause
+	StateDefeat
 )
 
 // -------- UI --------
@@ -270,6 +271,17 @@ func main() {
 		}
 	}()
 
+	var defeatBG rl.Texture2D
+	if img := rl.LoadImage(filepath.Join(assetsRoot, "ui", "defeat.png")); img.Data != nil {
+		defeatBG = rl.LoadTextureFromImage(img)
+		rl.UnloadImage(img)
+	}
+	defer func() {
+		if defeatBG.ID != 0 {
+			rl.UnloadTexture(defeatBG)
+		}
+	}()
+
 	// Аудио
 	rl.InitAudioDevice()
 	defer rl.CloseAudioDevice()
@@ -304,6 +316,8 @@ func main() {
 	btnExit := Button{Label: "Выйти"}
 	btnResume := Button{Label: "Продолжить"}
 	btnToMenu := Button{Label: "Выйти в меню"}
+	btnRestart := Button{Label: "Начать заново"}
+	btnQuit := Button{Label: "Выйти из игры"}
 
 	state := StateMenu
 
@@ -553,16 +567,10 @@ func main() {
 						continue
 					}
 
-					// --- вычисляем визуальный центр игрока (аналогично тому, как ты делаешь у врага)
-					var px, py float32
+					// Радиус игрока (из кадра спрайта) — можно заменить на player.Radius
 					var playerRadius float32
-
 					if player.A.Current != nil && player.A.FrameIndex < len(player.A.Current.Frames) {
 						f := player.A.Current.Frames[player.A.FrameIndex]
-						px = player.X - float32(f.OrigX)*player.Scale + float32(f.Src.Width)*player.Scale/2
-						py = player.Y - float32(f.OrigY)*player.Scale + float32(f.Src.Height)*player.Scale/2
-
-						// радиус — половина наибольшего измерения спрайта
 						w := float32(f.Src.Width) * player.Scale
 						h := float32(f.Src.Height) * player.Scale
 						if w > h {
@@ -570,15 +578,17 @@ func main() {
 						} else {
 							playerRadius = h * 0.5
 						}
-						playerRadius *= 0.7 // немного уменьшим зону попадания
+						playerRadius *= 0.7
 					} else {
-						// запасной вариант
-						px, py = player.X, player.Y
 						playerRadius = 20 * player.Scale
 					}
 
-					// --- проверка пересечения сегмента пули и окружности игрока
-					if segmentCircleHit(shot.PrevX, shot.PrevY, shot.X, shot.Y, px, py, playerRadius+shot.HitRadius) {
+					r := playerRadius + shot.HitRadius
+					d2 := segSegDistSq(
+						shot.PrevX, shot.PrevY, shot.X, shot.Y,
+						player.PrevX, player.PrevY, player.X, player.Y,
+					)
+					if d2 <= r*r {
 						player.TakeDamage(shot.Damage)
 						shot.Alive = false
 					}
@@ -603,16 +613,13 @@ func main() {
 
 			// 3) Если здоровье закончилось — простая «смерть» -> выход в меню
 			if player.HP <= 0 {
-				// стоп игровую музыку, включим меню
 				if hasGameMusic {
 					rl.StopMusicStream(gameMusic)
 				}
 				if hasMenuMusic {
 					rl.PlayMusicStream(menuMusic)
 				}
-				state = StateMenu
-				// можно тут же очистить врагов
-				enemies = enemies[:0]
+				state = StateDefeat
 				continue
 			}
 
@@ -812,6 +819,54 @@ func main() {
 			hint := "Enter/Esc — продолжить, ЛКМ — выбрать"
 			hs := rl.MeasureTextEx(uiFont, hint, 20, uiSpacing)
 			rl.DrawTextEx(uiFont, hint, rl.NewVector2(20, float32(rl.GetScreenHeight())-hs.Y-20), 20, uiSpacing, rl.White)
+
+		case StateDefeat:
+			// фон
+			if defeatBG.ID != 0 {
+				src := rl.NewRectangle(0, 0, float32(defeatBG.Width), float32(defeatBG.Height))
+				dst := rl.NewRectangle(0, 0, float32(rl.GetScreenWidth()), float32(rl.GetScreenHeight()))
+				rl.DrawTexturePro(defeatBG, src, dst, rl.NewVector2(0, 0), 0, rl.White)
+			} else {
+				rl.ClearBackground(rl.DarkGreen)
+			}
+
+			// кнопки
+			bw, bh := float32(380), float32(78)
+			cx := float32(rl.GetScreenWidth()) * 0.5
+			y0 := float32(rl.GetScreenHeight())*0.60 - bh
+			sp := float32(24)
+
+			btnRestart.Bounds = rl.NewRectangle(cx-bw/2, y0, bw, bh)
+			btnQuit.Bounds = rl.NewRectangle(cx-bw/2, y0+bh+sp, bw, bh)
+
+			mx, my := float32(rl.GetMouseX()), float32(rl.GetMouseY())
+			btnRestart.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnRestart.Bounds)
+			btnQuit.Hot = rl.CheckCollisionPointRec(rl.NewVector2(mx, my), btnQuit.Bounds)
+
+			btnRestart.Draw()
+			btnQuit.Draw()
+
+			if rl.IsKeyPressed(rl.KeyEnter) || (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnRestart.Hot) {
+				if hasMenuMusic {
+					rl.StopMusicStream(menuMusic)
+				}
+				if hasGameMusic {
+					rl.PlayMusicStream(gameMusic)
+				}
+				startGame()
+				break
+			}
+			if rl.IsKeyPressed(rl.KeyEscape) || (rl.IsMouseButtonPressed(rl.MouseLeftButton) && btnQuit.Hot) {
+				if hasMenuMusic {
+					rl.StopMusicStream(menuMusic)
+				}
+				if hasGameMusic {
+					rl.StopMusicStream(gameMusic)
+				}
+				rl.EndDrawing()
+				return
+			}
+
 		}
 
 		rl.EndDrawing()
