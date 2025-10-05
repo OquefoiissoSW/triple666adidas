@@ -18,17 +18,20 @@ type Enemy struct {
 	Kind       string
 	FacesRight bool
 
-	// Стрельба
-	CanShoot   bool // <-- НОВОЕ: может ли стрелять
-	FireTimer  float32
-	FirePeriod float32
-	FireRange  float32
-	Shots      []*Projectile
-
+	// ---- боевые характеристики ----
+	HP            int // новое поле
+	CanShoot      bool
+	FireTimer     float32
+	FirePeriod    float32
+	FireRange     float32
+	Shots         []*Projectile
 	MeleeRange    float32
 	AttackCD      float32
 	AttackTimer   float32
 	ContactDamage int
+
+	BaseSpeed   float32
+	FreezeTimer float32
 }
 
 func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, error) {
@@ -40,11 +43,14 @@ func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, 
 
 	e := &Enemy{
 		X: x, Y: y,
-		Speed: speed,
-		Scale: scale,
-		Idle:  clip,
-		Alive: true,
-		Kind:  kind,
+		Speed:     speed,
+		BaseSpeed: speed,
+		Scale:     scale,
+		Idle:      clip,
+		Alive:     true,
+		Kind:      kind,
+
+		HP: 50,
 
 		FacesRight:    false,           // базовый кадр смотрит влево
 		CanShoot:      kind != "melee", // <-- только не-melee
@@ -56,6 +62,7 @@ func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, 
 		ContactDamage: 10,
 	}
 	e.Anim.Play(e.Idle, true)
+
 	return e, nil
 }
 
@@ -118,6 +125,14 @@ func (e *Enemy) Update(dt float32, targetX, targetY float32) {
 		e.Shots = out
 	}
 
+	if e.FreezeTimer > 0 {
+		e.FreezeTimer -= dt
+		if e.FreezeTimer <= 0 {
+			e.Speed = e.BaseSpeed
+			e.CanShoot = e.Kind != "melee"
+		}
+	}
+
 	e.Anim.Update(dt)
 }
 
@@ -131,5 +146,16 @@ func (e *Enemy) Draw() {
 		for _, p := range e.Shots {
 			p.Draw()
 		}
+	}
+}
+
+func (e *Enemy) TakeDamage(dmg int) {
+	if !e.Alive || dmg <= 0 {
+		return
+	}
+	e.HP -= dmg
+	if e.HP <= 0 {
+		e.HP = 0
+		e.Alive = false
 	}
 }
