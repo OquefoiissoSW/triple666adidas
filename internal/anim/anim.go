@@ -160,3 +160,19 @@ func ifnz(v, def float32) float32 {
 	}
 	return v
 }
+
+func (a *Animator) Done() bool {
+	if a.Current == nil {
+		return false
+	}
+	// Если анимация не зациклена и мы на последнем кадре
+	if !a.Current.Loop && a.FrameIndex >= len(a.Current.Frames)-1 {
+		return true
+	}
+	return false
+}
+
+// CurrentClip возвращает текущий активный клип
+func (a *Animator) CurrentClip() *Clip {
+	return a.Current
+}

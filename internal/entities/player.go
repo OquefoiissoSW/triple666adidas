@@ -12,6 +12,7 @@ type Player struct {
 	PrevX, PrevY float32
 	Speed        float32
 	Idle         *anim.Clip
+	CrookThrow   *anim.Clip
 	A            anim.Animator
 	Scale        float32
 	HP           int
@@ -26,25 +27,35 @@ type Player struct {
 	FirePeriod float32
 
 	Souls int
+
+	Crook         *Crook
+	CrookReady    bool
+	CrookTimer    float32
+	CrookCooldown float32
 }
 
 func NewPlayer(assetsRoot string) (*Player, error) {
 	clip, err := anim.LoadFromJSON(filepath.Join(assetsRoot, "textures/ghost/idle/anim.json"))
+	crookThrow, _ := anim.LoadFromJSON(filepath.Join(assetsRoot, "textures", "ghost", "crook", "anim.json"))
 	if err != nil {
 		return nil, err
 	}
 
 	p := &Player{
 		X: 200, Y: 300,
-		Speed:  300,
-		Idle:   clip,
-		Scale:  1.25,
-		HP:     100,
-		Radius: 18,
+		Speed:      300,
+		Idle:       clip,
+		CrookThrow: crookThrow,
+		Scale:      1.25,
+		HP:         100,
+		Radius:     18,
 		// HurtFlash: 0, // по умолчанию
 
 		CanShoot:   true,
 		FirePeriod: 0.4,
+
+		CrookReady:    true,
+		CrookCooldown: 3.0,
 	}
 
 	p.PrevX, p.PrevY = p.X, p.Y
@@ -133,6 +144,13 @@ func (p *Player) Update(dt float32, camera *rl.Camera2D) {
 			p.HurtFlash = 0
 		}
 	}
+
+	p.A.Update(dt)
+
+	// если бросок проигрался — вернуть idle
+	if p.A.Done() && p.A.CurrentClip() == p.CrookThrow {
+		p.A.Play(p.Idle, true)
+	}
 }
 
 func (p *Player) TakeDamage(dmg int) {
@@ -165,6 +183,10 @@ func (p *Player) Draw(camera rl.Camera2D) {
 	} else {
 		// запасной вариант
 		p.A.Draw(p.X, p.Y, p.Scale, tint)
+	}
+
+	if p.Crook != nil && p.Crook.Active {
+		p.Crook.Draw(p.X, p.Y)
 	}
 
 	// отрисовка снарядов с учётом камеры (пули в мировых координатах)

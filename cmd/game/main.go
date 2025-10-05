@@ -495,6 +495,33 @@ func main() {
 			}
 			souls = outSouls
 
+			// === обновление крюка ===
+			if player.Crook != nil && player.Crook.Active {
+				player.Crook.Update(dt, player.X, player.Y, souls)
+			} else {
+				// если крюк завершил — начинаем откат
+				if player.Crook != nil && !player.Crook.Active && !player.CrookReady {
+					player.CrookTimer += dt
+					if player.CrookTimer >= player.CrookCooldown {
+						player.CrookReady = true
+						player.CrookTimer = 0
+					}
+				}
+			}
+
+			if rl.IsKeyPressed(rl.KeyQ) && player.CrookReady {
+				mouse := rl.GetMousePosition()
+				world := rl.GetScreenToWorld2D(mouse, cam)
+
+				player.Crook = entities.NewCrook(assetsRoot, player.X, player.Y, world.X, world.Y)
+				player.CrookReady = false
+				player.CrookTimer = 0
+
+				// проигрываем анимацию броска
+				player.A.Play(player.CrookThrow, false)
+				rl.PlaySound(player.Crook.SndThrow)
+			}
+
 			// --- УРОН ---
 			// 1) Пули во врагах уже обновлены; проверим попадание по игроку
 			// --- Попадание пуль врагов по игроку ---

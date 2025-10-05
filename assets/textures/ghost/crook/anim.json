@@ -1,0 +1,15 @@
+{
+  "name": "crook",
+  "type": "sheet",
+  "image": "sheet.png",
+  "frameWidth": 128,
+  "frameHeight": 128,
+  "rows": 1,
+  "cols": 4,
+  "fps": 10,
+  "loop": false,
+  "origin": [
+    64,
+    108
+  ]
+}
