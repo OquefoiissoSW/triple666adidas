@@ -243,6 +243,16 @@ func main() {
 		}
 	}()
 
+	ultHUD, err := ui.LoadUltHUD(assetsRoot, 20, 20, 1.5)
+	if err != nil {
+		fmt.Println("ult hud:", err)
+	}
+	defer func() {
+		if ultHUD != nil {
+			ultHUD.Unload()
+		}
+	}()
+
 	fontPath := filepath.Join(assetsRoot, "fonts", "NotoSans-Regular.ttf")
 	uiFont = rl.LoadFontEx(fontPath, int32(48), charset) // если нужно: , int32(len(charset))
 	rl.SetTextureFilter(uiFont.Texture, rl.FilterBilinear)
@@ -486,6 +496,7 @@ func main() {
 				// если душа исчезла и она притягивалась — засчитываем игроку
 				if !s.Alive && s.IsAbsorbing {
 					player.Souls++
+					player.Ult.AddSouls(1)
 					continue
 				}
 
@@ -517,10 +528,21 @@ func main() {
 				player.CrookReady = false
 				player.CrookTimer = 0
 
+				imgPath := filepath.Join(assetsRoot, "pictures", "headshot.png")
+				img := rl.LoadImage(imgPath)
+				defer rl.UnloadImage(img)
+				player.Crook.HeadshotTex = rl.LoadTextureFromImage(img)
+				rl.SetTextureFilter(player.Crook.HeadshotTex, rl.FilterPoint)
+
 				// проигрываем анимацию броска
 				player.A.Play(player.CrookThrow, false)
 				rl.PlaySound(player.Crook.SndThrow)
 			}
+
+			if rl.IsKeyPressed(rl.KeyE) {
+				player.Ult.TryActivate(player, enemies)
+			}
+			player.Ult.Update(dt, enemies)
 
 			// --- УРОН ---
 			// 1) Пули во врагах уже обновлены; проверим попадание по игроку
@@ -709,6 +731,9 @@ func main() {
 			}
 			player.Draw(cam)
 			rl.EndMode2D()
+			if ultHUD != nil {
+				ultHUD.Draw(player.Ult.Charge)
+			}
 
 			// HUD
 			if hud != nil {

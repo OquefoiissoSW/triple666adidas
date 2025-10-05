@@ -29,6 +29,9 @@ type Enemy struct {
 	AttackCD      float32
 	AttackTimer   float32
 	ContactDamage int
+
+	BaseSpeed   float32
+	FreezeTimer float32
 }
 
 func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, error) {
@@ -40,11 +43,12 @@ func NewEnemyKind(assetsRoot, kind string, x, y, speed, scale float32) (*Enemy, 
 
 	e := &Enemy{
 		X: x, Y: y,
-		Speed: speed,
-		Scale: scale,
-		Idle:  clip,
-		Alive: true,
-		Kind:  kind,
+		Speed:     speed,
+		BaseSpeed: speed,
+		Scale:     scale,
+		Idle:      clip,
+		Alive:     true,
+		Kind:      kind,
 
 		HP: 50,
 
@@ -119,6 +123,14 @@ func (e *Enemy) Update(dt float32, targetX, targetY float32) {
 			}
 		}
 		e.Shots = out
+	}
+
+	if e.FreezeTimer > 0 {
+		e.FreezeTimer -= dt
+		if e.FreezeTimer <= 0 {
+			e.Speed = e.BaseSpeed
+			e.CanShoot = e.Kind != "melee"
+		}
 	}
 
 	e.Anim.Update(dt)

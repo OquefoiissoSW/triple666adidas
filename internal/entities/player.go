@@ -32,6 +32,8 @@ type Player struct {
 	CrookReady    bool
 	CrookTimer    float32
 	CrookCooldown float32
+
+	Ult *Ultimate
 }
 
 func NewPlayer(assetsRoot string) (*Player, error) {
@@ -57,6 +59,7 @@ func NewPlayer(assetsRoot string) (*Player, error) {
 		CrookReady:    true,
 		CrookCooldown: 3.0,
 	}
+	p.Ult = NewUltimate(assetsRoot)
 
 	p.PrevX, p.PrevY = p.X, p.Y
 	p.A.Play(p.Idle, true)
@@ -165,6 +168,12 @@ func (p *Player) TakeDamage(dmg int) {
 	p.HurtFlash = 0.25  // 🔴 250 мс красный флэш
 }
 
+func (p *Player) Unload() {
+	if p.Ult != nil {
+		p.Ult.Unload()
+	}
+}
+
 func (p *Player) Draw(camera rl.Camera2D) {
 	tint := rl.White
 	if p.HurtFlash > 0 {
@@ -187,6 +196,20 @@ func (p *Player) Draw(camera rl.Camera2D) {
 
 	if p.Crook != nil && p.Crook.Active {
 		p.Crook.Draw(p.X, p.Y)
+	}
+
+	if p.Ult != nil && p.Ult.flashActive {
+		t := p.Ult.flashTime / p.Ult.flashDur
+		if t > 1 {
+			t = 1
+		}
+
+		// плавное затухание прозрачности
+		alpha := uint8(180 * (1 - t))
+		color := rl.NewColor(50, 255, 50, alpha)
+
+		radius := 120 * p.Scale
+		rl.DrawCircleV(rl.NewVector2(p.X, p.Y), radius, color)
 	}
 
 	// отрисовка снарядов с учётом камеры (пули в мировых координатах)

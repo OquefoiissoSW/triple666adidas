@@ -34,6 +34,10 @@ type Crook struct {
 
 	SndThrow rl.Sound
 	SndHit   rl.Sound
+
+	ShowHeadshot  bool
+	HeadshotTimer float32
+	HeadshotTex   rl.Texture2D
 }
 
 // Создание нового крюка
@@ -134,6 +138,21 @@ func (c *Crook) Update(dt float32, playerX, playerY float32, souls []*Soul) {
 		if dist < 20 {
 			c.Active = false
 		}
+
+		if c.HeadshotTimer > 0 {
+			c.HeadshotTimer -= dt
+			if c.HeadshotTimer < 0 {
+				c.HeadshotTimer = 0
+				c.ShowHeadshot = false
+			}
+		}
+
+		// при попадании души
+		if c.HitSoul != nil {
+			rl.PlaySound(c.SndHit)
+			c.ShowHeadshot = true
+			c.HeadshotTimer = 2.0
+		}
 	}
 }
 
@@ -157,6 +176,36 @@ func (c *Crook) Draw(playerX, playerY float32) {
 	origin := rl.NewVector2(float32(c.Tex.Width)*c.Scale/2, float32(c.Tex.Height)*c.Scale) // нижняя точка = "хвост"
 
 	rl.DrawTexturePro(c.Tex, src, dest, origin, c.RotDeg, rl.White)
+
+	if c.ShowHeadshot && c.HeadshotTex.ID != 0 {
+		// позиция над игроком
+		offsetY := float32(60) // насколько выше игрока рисуем картинку
+		headX := playerX - float32(c.HeadshotTex.Width)/2
+		headY := playerY - offsetY - float32(c.HeadshotTex.Height)/2
+
+		dst := rl.NewRectangle(
+			headX,
+			headY,
+			float32(c.HeadshotTex.Width),
+			float32(c.HeadshotTex.Height),
+		)
+
+		// делаем эффект плавного исчезновения (по желанию)
+		alpha := float32(1.0)
+		if c.HeadshotTimer < 0.2 {
+			alpha = c.HeadshotTimer / 0.2 // последние 0.2 сек — плавное исчезновение
+		}
+
+		tint := rl.Fade(rl.White, alpha)
+		rl.DrawTexturePro(
+			c.HeadshotTex,
+			rl.NewRectangle(0, 0, float32(c.HeadshotTex.Width), float32(c.HeadshotTex.Height)),
+			dst,
+			rl.NewVector2(0, 0),
+			0,
+			tint,
+		)
+	}
 }
 
 // Освобождение текстуры при завершении
