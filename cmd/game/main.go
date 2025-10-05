@@ -374,9 +374,27 @@ func main() {
 		}
 	}
 
+	cursorPos := rl.NewVector2(float32(rl.GetScreenWidth()/2), float32(rl.GetScreenHeight()/2))
+	cursorSpeed := float32(500) // пикселей в секунду
+
 	for !rl.WindowShouldClose() {
 		input.Update()
 		dt := float32(rl.GetFrameTime())
+
+		xAxis := rl.GetGamepadAxisMovement(0, rl.GamepadAxisRightX) // 0 - первый геймпад
+		yAxis := rl.GetGamepadAxisMovement(0, rl.GamepadAxisRightY)
+		deadzone := float32(0.2)
+		if float32(math.Abs(float64(xAxis))) < deadzone {
+			xAxis = 0
+		}
+		if float32(math.Abs(float64(yAxis))) < deadzone {
+			yAxis = 0
+		}
+
+		cursorPos.X += xAxis * cursorSpeed * dt
+		cursorPos.Y += yAxis * cursorSpeed * dt
+
+		rl.SetMousePosition(int(cursorPos.X), int(cursorPos.Y))
 
 		if input.Current.Fullscreen {
 			rl.ToggleFullscreen()
@@ -543,7 +561,7 @@ func main() {
 				rl.PlaySound(player.Crook.SndThrow)
 			}
 
-			if rl.IsKeyPressed(rl.KeyE) {
+			if input.Current.Ulta {
 				player.Ult.TryActivate(player, enemies)
 			}
 			player.Ult.Update(dt, enemies)
