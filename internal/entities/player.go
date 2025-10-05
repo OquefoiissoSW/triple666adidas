@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"example.com/my2dgame/internal/anim"
+	"example.com/my2dgame/internal/input"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -70,16 +71,16 @@ func (p *Player) Update(dt float32, camera *rl.Camera2D) {
 	p.PrevX, p.PrevY = p.X, p.Y
 	moveX, moveY := float32(0), float32(0)
 
-	if rl.IsKeyDown(rl.KeyA) || rl.IsKeyDown(rl.KeyLeft) {
+	if input.Current.MoveLeft {
 		moveX -= 1
 	}
-	if rl.IsKeyDown(rl.KeyD) || rl.IsKeyDown(rl.KeyRight) {
+	if input.Current.MoveRight {
 		moveX += 1
 	}
-	if rl.IsKeyDown(rl.KeyW) || rl.IsKeyDown(rl.KeyUp) {
+	if input.Current.MoveUp {
 		moveY -= 1
 	}
-	if rl.IsKeyDown(rl.KeyS) || rl.IsKeyDown(rl.KeyDown) {
+	if input.Current.MoveDown {
 		moveY += 1
 	}
 
@@ -105,7 +106,7 @@ func (p *Player) Update(dt float32, camera *rl.Camera2D) {
 
 	// 🔫 стрельба на ПКМ
 	p.FireTimer -= dt
-	if p.CanShoot && rl.IsMouseButtonDown(rl.MouseRightButton) && p.FireTimer <= 0 {
+	if p.CanShoot && input.Current.Shoot && p.FireTimer <= 0 {
 		mouse := rl.GetMousePosition()
 		world := rl.GetScreenToWorld2D(mouse, *camera)
 
